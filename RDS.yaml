@@ -1,1 +1,173 @@
+AWSTemplateFormatVersion: 2010-09-09
 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Database Parameters
+      Parameters:
+        - DatabaseInstanceType
+        - DatabaseMasterUsername
+        - DatabaseMasterPassword
+        - DatabaseName
+        - DatabaseSecurityGroup
+        - NumberOfSubnets
+        - Subnet
+        - EnvironmentType
+        - EncryptionKeyArn
+    ParameterLabels:
+      DatabaseInstanceType:
+        default: DB Instance Class
+      DatabaseMasterUsername:
+        default: DB Master Username
+      DatabaseMasterPassword:
+        default: DB Master Password
+      DatabaseName:
+        default: DB Name
+      DatabaseSecurityGroup:
+        default: DB Security Group
+      NumberOfSubnets:
+        default: Number of subnets
+      Subnet:
+        default: Subnets
+      EnvironmentType:
+        default: Deployment Environment
+      EncryptionKeyArn:
+        default: Encryption Key Arn
+
+Parameters:
+  DatabaseInstanceType:
+    Default: db.t3.medium
+    Description: The Amazon RDS database instance class.
+    Type: String
+  DatabaseMasterUsername:
+    AllowedPattern: ^([a-zA-Z0-9]*)$
+    Description: The Amazon RDS master username.
+    ConstraintDescription: Must contain only alphanumeric characters (minimum 8; maximum 16).
+    MaxLength: 16
+    MinLength: 8
+    Type: String
+  DatabaseMasterPassword:
+    AllowedPattern: ^([a-z0-9A-Z`~!#$%^&*()_+,\\-])*$
+    ConstraintDescription: Must be letters (upper or lower), numbers, and these special characters '_'`~!#$%^&*()_+,-
+    Description: The Amazon RDS master password.
+    MaxLength: 41
+    MinLength: 8
+    NoEcho: true
+    Type: String
+  DatabaseName:
+    AllowedPattern: ^([a-zA-Z0-9]*)$
+    Description: The Amazon RDS master database name.
+    Type: String
+  DatabaseSecurityGroup:
+    Description: Select the database security group.
+    Type: AWS::EC2::SecurityGroup::Id
+  NumberOfSubnets:
+    AllowedValues:
+    - 2
+    - 3
+    Default: 3
+    Description: Number of subnets. This must match your selections in the list of subnets below.
+    Type: String
+  Subnet:
+    Description: Select existing subnets. The number selected must match the number of subnets above. Subnets selected must be in separate AZs.
+    Type: List<AWS::EC2::Subnet::Id>
+  EnvironmentType:
+    Type: String
+    Description: Environment of Deployment
+    AllowedValues: [ 'dev', 'qa', 'qa2', 'uat', 'int', 'production' ]
+    Default: 'dev'
+  EncryptionKeyArn:
+    Description: 'RDS encryption key ARN.'
+    Type: String
+
+Conditions:
+  EnvironmentProd:
+      !Equals [ !Ref EnvironmentType, "production" ]
+  EnvironmentNonProd:
+    !Or
+      - !Equals [ !Ref EnvironmentType, "dev" ]
+      - !Equals [ !Ref EnvironmentType, "production" ]
+      - !Equals [ !Ref EnvironmentType, "qa2" ]
+
+Resources:
+  DatabaseClusterProvisioned:
+    Condition: EnvironmentNonProd
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      StorageEncrypted: true
+      KmsKeyId: !Ref EncryptionKeyArn
+      BackupRetentionPeriod: 7
+      DatabaseName: !Ref DatabaseName
+      DBSubnetGroupName: !Ref DataSubnetGroup
+      DBClusterIdentifier: !Sub 'cluster-${EnvironmentType}-v2-${AWS::Region}'
+      DBClusterParameterGroupName: !Ref DatabaseClusterParameterGroup
+      EnableCloudwatchLogsExports:
+        - 'postgresql'
+      Engine: aurora-postgresql
+      EngineVersion: '13.15'
+      MasterUsername: !Ref DatabaseMasterUsername
+      MasterUserPassword: !Ref DatabaseMasterPassword
+      Port: 5432
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      Tags:
+        - Key: Team
+          Value: DatabaseTeam
+
+  DatabaseInstance0:
+    Condition: EnvironmentNonProd
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBClusterIdentifier: !Ref DatabaseClusterProvisioned
+      DBInstanceClass: !If
+        - EnvironmentProd
+        - db.r5.xlarge
+        - !Ref DatabaseInstanceType
+      DBSubnetGroupName: !Ref DataSubnetGroup
+      Engine: aurora-postgresql
+      EnablePerformanceInsights: true
+      PromotionTier: 0
+      Tags:
+        - Key: Team
+          Value: DatabaseTeam
+
+  DatabaseInstance1:
+    Condition: EnvironmentNonProd
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBClusterIdentifier: !Ref DatabaseClusterProvisioned
+      DBInstanceClass: !If
+        - EnvironmentProd
+        - db.r5.xlarge
+        - !Ref DatabaseInstanceType
+      DBSubnetGroupName: !Ref DataSubnetGroup
+      Engine: aurora-postgresql
+      EnablePerformanceInsights: true
+      PromotionTier: 1
+      Tags:
+        - Key: Team
+          Value: DatabaseTeam
+
+Outputs:
+  DatabaseClusterEndpoint:
+    Description: The endpoint of the RDS cluster.
+    Value: !GetAtt [ DatabaseClusterProvisioned, Endpoint.Address ]
+
+  DatabaseClusterArn:
+    Description: The ARN of the RDS cluster.
+    Value: !GetAtt [ DatabaseClusterProvisioned, Arn ]
+
+  DatabaseInstance0Arn:
+    Description: The ARN of the primary RDS instance.
+    Value: !GetAtt [ DatabaseInstance0, Arn ]
+
+  DatabaseInstance1Arn:
+    Description: The ARN of the secondary RDS instance.
+    Value: !GetAtt [ DatabaseInstance1, Arn ]
